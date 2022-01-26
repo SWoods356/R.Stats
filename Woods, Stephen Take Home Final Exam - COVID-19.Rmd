@@ -1,0 +1,483 @@
+---
+title: "Covid Trends Take Home Exam"
+author: "Woods, Stephen"
+date: "12/05/2021"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r analysis_setup1, message = FALSE, warning = FALSE}
+
+#install tinytex for pdf output
+# install.packages('tinytex')
+# tinytex::install_tinytex()
+
+# load initial packages
+
+
+library(dplyr)
+library(flux)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+library(rockchalk)
+library(tidyverse)
+library(ggthemes)
+library(ggpubr)
+library(RColorBrewer)
+
+# read in static csv
+
+mydata <- read.csv("covid.csv", sep = ",", stringsAsFactors = TRUE)
+
+# see basic elements of data
+
+str(mydata)
+
+head(mydata)
+
+max(mydata$year)
+min(mydata$year)
+
+#rename cumulative cases column
+
+names(mydata)[names(mydata) == "Cumulative_number_for_14_days_of_COVID.19_cases_per_100000"] <- "cum_cases"
+
+
+#add a month/year column
+mydata$Month_Yr <- format(as.Date(mydata$dateRep, format = "%d/%m/%y"), "%m/%y")
+
+#add a case rate column
+mydata$case_rate <- mydata$cases/mydata$popData2019*100000
+mydata$death_rate <- mydata$deaths/mydata$popData2019*100000
+mydata$death_case_rate <- mydata$deaths/mydata$cases
+
+head(mydata)
+```
+
+
+```{r Part_1, fig.width = 12}
+
+cols <- c("cases", "deaths", "cum_cases", "case_rate", "death_rate", "death_case_rate")
+
+summary(mydata[cols])
+
+
+
+```
+
+***Summaries of cases and deaths show negative case counts, which should be removed for regression analysis if present for selected country.***
+
+
+***#### Section 1: Descriptive Statistics: Do an Exploratory Data Analysis (EDA) and provide appropriate summary statistics / visualizations to help understand the spread of the disease (incidence) as well as its fatality rate. (5 points) ####***
+
+(1)(a) See total deaths and cases by continent and month. 
+
+```{r Part_1a, fig.width = 12}
+
+#Get an idea of total deaths by continent over time.
+
+
+col1 <- ggplot(data = mydata, aes(x = Month_Yr, y = deaths/1000, fill = continentExp)) + 
+  geom_col() + 
+  scale_fill_brewer(palette = "Accent") + 
+  ggtitle("Monthly Deaths By Continent") +
+  ylab("Deaths (Thousands)") + xlab("Month/Year")+
+  theme(legend.position = c(), legend.background = element_rect())
+
+col2 <- ggplot(data = mydata, aes(x = Month_Yr, y = cases/1000, fill = continentExp)) + 
+  geom_col() + 
+  scale_fill_brewer(palette = "Accent") + 
+  ggtitle("Monthly Cases By Continent") +
+  ylab("Cases (Thousands)") + xlab("Month/Year")+
+  theme(legend.position = c(), legend.background = element_rect())
+
+
+figure <- ggarrange(col1, col2,
+          font.label = list(size = 10),
+          #vjust = .3,
+          #hjust = -1.2,
+          ncol = 1, nrow = 2,
+          align = "v")
+
+annotate_figure(figure,
+               top = text_grob("COVID-19 Spread", size = 14))
+
+
+
+
+```
+
+***COVID-19 deaths start in Asia in February 2020 and quickly spread to Europe and America by March 2020. After march, deaths drop slightly but peak again in November. Cases follow a more steady trend, increasing from February to a November peak. Europe, America, and Asia are the main continents affected, though this could be due to lack of reporting from other continents.***
+
+
+(1)(b) See Fatality Rate by Month and continent
+
+```{r Part_1b, fig.width = 12, fig.height = 8}
+#get total deaths by Month_Year
+
+monthly_deaths <- aggregate(cbind(cases,deaths) ~ Month_Yr, mydata, sum)
+monthly_df <- as.data.frame(monthly_deaths)
+
+#define fatality rate as new deaths divided by new cases
+monthly_df$fatality <- monthly_df$deaths/monthly_df$cases
+
+
+#look at total monthly fatality rate
+
+fatality1 <- ggplot(data = monthly_df) + aes(x = Month_Yr, y = fatality) +
+    geom_col(fill = "cadetblue") + ggtitle("Monthly Fatality Rate By Month/Year") +
+    ylab("Fatality Rate") + xlab("Month/Year")+
+    theme(legend.position = c(), legend.background = element_rect())
+
+fatality1
+
+```
+***(World wide fatality rate peaks around 8% in April 2020 and declines to around 2% from July 2020 through December 2020.)***
+
+
+
+(1)(c) Look at the distribution of cases with qq plots and box plots.
+
+```{r Part_1c}
+
+par(mfrow = c(2,1))
+
+qqnorm(mydata$cases, col = "indianred", main = "Case Distribution", xlab = "theoretical", ylab = "sample")
+qqline(mydata$cases)
+
+
+skewness(mydata$cases)
+kurtosis(mydata$cases)
+
+boxplot(mydata$cases ~ mydata$continentExp, col = "cadetblue", main = "Cases by Continent", xlab = "Continent", ylab = "Cases")
+```
+
+
+***(With time series data, it makes sense that there are many outliers and data does not resemble a normal distribution)***
+
+
+
+2)Inferential Statistics: Pick 2 countries and compare their incidence and fatality rates using hypothesis testing and confidence interval methods
+
+```{r Part_2}
+
+#look at cases and deaths by country to compare countries with a similar magnitude of cases:
+
+country_deaths <- aggregate(cbind(cases,deaths) ~ countryterritoryCode, mydata, sum)
+country_df <- as.data.frame(country_deaths)
+
+head(country_df[order(country_df$cases, decreasing = TRUE), ])
+
+mydata_2 <- subset(mydata, countryterritoryCode == "USA" | countryterritoryCode == "IND")
+
+
+# I am going to compare the United States and India. First I want to see an overview of the spread.
+col3 <- ggplot(data = mydata_2, aes(x = Month_Yr, y = deaths/1000, fill = countryterritoryCode)) + 
+  geom_col() + 
+  scale_fill_brewer(palette = "Accent") + 
+  ggtitle("Monthly Deaths By Continent") +
+  ylab("Deaths (Thousands)") + xlab("Month/Year")+
+  theme(legend.position = c(), legend.background = element_rect())
+
+col4 <- ggplot(data = mydata_2, aes(x = Month_Yr, y = cases/1000, fill = countryterritoryCode)) + 
+  geom_col() + 
+  scale_fill_brewer(palette = "Accent") + 
+  ggtitle("Monthly Cases By Continent") +
+  ylab("Cases (Thousands)") + xlab("Month/Year")+
+  theme(legend.position = c(), legend.background = element_rect())
+
+
+figure <- ggarrange(col3, col4,
+          font.label = list(size = 10),
+          ncol = 1, nrow = 2,
+          align = "v")
+
+annotate_figure(figure,
+               top = text_grob("COVID-19 Spread", size = 14))
+
+```
+
+
+***Answer: (I have picked the USA and India as those countries had the largest volumes of cases and deaths. Initial plots show both cases and deaths spiked in USA before India.)***
+
+
+(2)(a) compare their incidence and fatality rates using hypothesis testing and confidence interval methods
+
+```{r Part_2a}
+# Subset data into dataframes for USA and India
+
+head(mydata_2)
+
+mydata_USA <- subset(mydata, countryterritoryCode == "USA")
+mydata_IND <- subset(mydata, countryterritoryCode == "IND")
+
+#Determine if there is a significant difference in mean death rate between USA and India
+
+t.test(mydata_USA$death_rate, mydata_IND$death_rate, alternative = "two.sided", conf.level = 0.95, var.equal = FALSE)
+
+#Determine if there is a significant difference in mean case rate between USA and India
+
+t.test(mydata_USA$case_rate, mydata_IND$case_rate, alternative = "two.sided", conf.level = 0.95, var.equal = FALSE)
+
+#Determine if there is a significant difference in mean death_case_rate (new deaths/new cases) between USA and India
+
+t.test(mydata_USA$death_case_rate, mydata_IND$death_case_rate, alternative = "two.sided", conf.level = 0.95, var.equal = FALSE)
+
+```
+***(The Welch two sample t test has revealed a significant difference in mean values for death rate, case rate, and fatality rate between the USA and India. The confidence interval for the difference in mean death rate (new deaths as a percent of 2019 population) is .205 to .301. The confidence interval for the difference in mean case rate (new daily cases as a percent of 2019 population) is 10.370 to  13.715. For both of these metrics, the United States has a significantly higher rate with a very low p value. This implies the U.S. has both more cases and deaths per its overall population in 2019. The last test compares the mean values of new deaths per new cases. This test shows a significant difference in means in the same direction, but the difference is not as materially significant, with a confidence interval from .001 to .012. This implies while the United States had significantly and materially more cases and deaths as a percent of population, the difference in fatality rate (new deaths/new cases) was much smaller.)***
+
+
+
+
+(3)  Correlation: Pick all the countries and evaluate the relationship between incidence rates and fatality rates. Compute the correlation coefficient, if relevant.
+
+```{r Part_3, fig.width = 12}
+
+# create a data frame containing total metrics by day
+
+
+daily_data <- aggregate(cbind(cases, cum_cases, deaths) ~ dateRep, mydata, sum)
+daily_df <- as.data.frame(daily_data)
+daily_df$fatality <- daily_df$deaths/daily_df$cases
+
+#look at a scatter plot between cases and deaths
+
+point1 <- ggplot(data = daily_df) + aes(x = cases, y = deaths) +
+    geom_point(color = "cadetblue") + ggtitle("New Cases vs New Deaths") +
+    ylab("Deaths") + xlab("Cases")+
+    theme(legend.position = c(), legend.background = element_rect())
+
+point2 <- ggplot(data = daily_df) + aes(x = cum_cases, y = deaths) +
+    geom_point(color = "indianred") + ggtitle("Cumulative Cases vs New Deaths") +
+    ylab("Deaths") + xlab("Cumulative Cases")+
+    theme(legend.position = c(), legend.background = element_rect())
+
+figure <- ggarrange(point1, point2,
+          font.label = list(size = 10),
+          ncol = 1, nrow = 2,
+          align = "v")
+
+annotate_figure(figure,
+               top = text_grob("Relationship between Cases and Deaths", size = 14))
+
+```
+
+
+
+
+***(There is a moderate positive correlation between new cases and new deaths and cumulative cases and new deaths. I do not see much of a visual difference between the two charts.)***
+
+
+
+(3)(b) Get log 10 transformations of columns and see if that reveals a better relationship and generate a correlation matrix plot.
+```{r Part_3b, fig.width = 12, fig.height = 8}
+
+daily_df$L_cases <- log10(daily_df$cases)
+daily_df$L_deaths <- log10(daily_df$deaths)
+
+
+ 
+ggplot(data = daily_df) + aes(x = L_cases, y = L_deaths) +
+    geom_point(color = "cadetblue") + ggtitle("New L_Cases vs New L_Deaths") +
+    ylab("L_Deaths") + xlab("L_Cases")+
+    theme(legend.position = c(), legend.background = element_rect())
+
+
+library(corrplot)
+
+cols2 <- c("cases", "deaths", "L_cases", "L_deaths", "cum_cases")
+      
+corr_mat <- cor(daily_df[cols2], method = "s")
+
+corr_mat
+
+library("corrplot")
+corrplot(corr_mat, method = "color",
+     type = "upper", order = "hclust", 
+     addCoef.col = "black",
+     tl.col = "black") 
+
+
+
+
+```
+
+
+***(There is a moderately strong correlation of 0.8 between both cases and deaths and L_cases and L_deaths. Log ten transformations do not appear to add anything, so will not be considered in further analysis. There is a correlation of .98 between cum_cases and cases, which makes sense as they are different metrics reporting on the same variable.)***
+
+
+(4) Regression: Pick United States. Look at the time series of cases and time series of deaths. Use a regression model to predict the number of cases and the number of deaths for the next 5 days in the future.
+```{r Part_4, fig.width = 12, fig.height = 8}
+library(lubridate)  # widely used for handling dates
+library(tidyverse) # loads a group of 'tidyverse' packages, including dplyr, which define mutate() and filter() functions
+
+# Filter for only U.S. and change dateRep to date type.
+
+covid_US <- mydata %>%
+  mutate(dateRep = dmy(dateRep)) %>%
+  filter(countryterritoryCode == "USA") %>%
+  arrange(dateRep)
+
+countdays <- c(1:350)
+
+covid_US$countdays <- countdays
+
+tail(covid_US)
+
+
+# Look at different models for predicting deaths using case data
+
+#summary(lr_md1.1 <- lm(deaths ~ cases*dateRep*month, data = covid_US))
+
+# Look at different models for predicting deaths using case data
+
+#summary(lr_md1.2 <- lm(deaths ~ cases, data = covid_US))
+
+# Look at different models for predicting deaths using case data
+
+summary(lr_md1.3 <- lm(deaths ~ as.factor(month)*countdays+cases, data = covid_US))
+ #best performing
+
+# Look at different models for predicting deaths using cum_case data
+
+#summary(lr_md1.4 <- lm(deaths ~ cum_cases*dateRep*month, data = covid_US))
+
+
+# Look at different models for predicting cases
+summary(lr_md2 <- lm(cases ~ as.factor(month)*countdays, data = covid_US))
+  #best performing
+
+```
+
+***(Models with the highest Adjusted R-squared values were selected. For predicting deaths, lr_md1.3 had the highest adjusted R-squared value of .7686, indicating that the variables month (factored), count days (count of days since pandemic began), the interaction between factored month and countdays, and case count can explain 76.86% of the variation in deaths. The cases variable shows strong prediction value, with a high t value and strong significance. For predicting cases, a model using factored month, countdays, and the interaction of month and countdays can explain 96.19% of the variance in new cases.)***
+
+
+
+(4)(a) Plot out residuals of death predicting model
+```{r Part_4a, fig.width = 12, fig.height = 8}
+
+plot(lr_md1.3)
+
+
+```
+
+***(For the death prediction model, while residuals are grouped around various points, they do not follow a clear trend)***
+
+
+
+
+(4)(b) Plot out residuals of case predicting model
+```{r Part_4b, fig.width = 12, fig.height = 8}
+
+plot(lr_md2)
+
+
+```
+
+
+***(For the case prediction model, the residuals vs fitted plot does suggest that residuals do not follow a constant variance. As fitted values increase, magnitude of residuals increase.)***
+
+
+
+(4)(c.1) Predict cases for the next five days.
+```{r Part_4c1, fig.width = 12, fig.height = 8}
+
+month <- c(12,12,12,12,12)
+countdays <- c(351,352,353,354,355)
+
+
+
+case_df <- data.frame(month, countdays)
+
+
+
+case_model <- predict(lr_md2, newdata = case_df, interval = "prediction", level = 0.95)
+
+case_model <- data.frame(month, countdays, case_model)
+
+case_model
+
+
+```
+
+
+(4)(c.2) Predict deaths for the next five days.
+```{r Part_4c2, fig.width = 12, fig.height = 8}
+
+
+#use predicted cases from model above as an input for the cases predictor for my death model
+cases <- unlist(case_model[3])
+
+
+death_df <- data.frame(month, countdays, cases)
+
+
+death_model <- predict(lr_md1.3, newdata = death_df, interval = "prediction", level = 0.95)
+
+#combine both models into a final output/prediction model for the next five days
+
+predict_model <- data.frame(case_model, death_model)
+
+colnames(predict_model) <- c("month", "countdays", "cases", "casesLWR", "casesUPR", "deaths", "deathsLWR", "deathsUPR")
+
+round(predict_model,0)
+
+
+```
+
+
+***(Above shows predicted interval estimates for COVID-19 cases and deaths for days 351 through 355. This model is predicting around 210,000 new cases each day and 2,400 deaths each day. These levels are consistent with case and death volumes observed from days 340 to 350. Given factored month is one of the explanatory variables, it makes sense that predicted values for days within December are close to values last observed in December.)***
+
+
+
+***(Overall, there is significant variability in COVID-19 cases and deaths. While we observed a correlation of .80 between new cases and new deaths, it was harder to develop a linear regression model that historically explained the variation in new deaths than it was for new cases. This was surprising as new cases or cumulative cases should be an indicator of future new deaths. My linear model of new deaths achieved an R-squared value of .7686 and my model of new cases achieved an R-squared value of 96.19.)***
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
